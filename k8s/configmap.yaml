@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: digital-fte-config
+  namespace: digital-fte
+data:
+  KAFKA_BROKER: "kafka-service:9092"
+  DATABASE_URL_READ: "postgresql+psycopg2://user@db/crm"
+  LOG_LEVEL: "INFO"
