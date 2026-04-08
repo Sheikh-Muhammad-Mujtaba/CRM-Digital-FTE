@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import routes
+from app.api import gmail_routes, routes
 from app.core.database import AsyncSessionLocal
 
 app = FastAPI(
@@ -25,6 +25,7 @@ app.add_middleware(
 )
 
 app.include_router(routes.router, prefix="/api")
+app.include_router(gmail_routes.router, prefix="/api")
 
 
 @app.get("/")

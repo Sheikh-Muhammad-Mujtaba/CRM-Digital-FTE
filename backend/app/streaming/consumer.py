@@ -4,8 +4,12 @@ import logging
 import os
 import uuid
 
-from confluent_kafka import Consumer, KafkaError, KafkaException
 from dotenv import load_dotenv
+
+# Load environment variables before local imports
+load_dotenv()
+
+from confluent_kafka import Consumer, KafkaError, KafkaException
 from sqlalchemy import select
 
 from app.agent.core import crm_agent

@@ -1,16 +1,20 @@
 import asyncio
 import logging
 import os
-import smtplib
-from email.message import EmailMessage
 
 import httpx
+
+from app.integrations.gmail_api import send_email_message
 
 logger = logging.getLogger(__name__)
 
 
-def _smtp_configured() -> bool:
-    return bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_FROM"))
+def _gmail_oauth_configured() -> bool:
+    return bool(
+        os.getenv("GMAIL_CLIENT_ID")
+        and os.getenv("GMAIL_CLIENT_SECRET")
+        and os.getenv("GMAIL_REFRESH_TOKEN")
+    )
 
 
 def _twilio_configured() -> bool:
@@ -27,32 +31,18 @@ def _is_placeholder_email(email: str | None) -> bool:
     return email.endswith("@intake.placeholder")
 
 
-async def send_email_smtp(to_addr: str, subject: str, body: str) -> str:
-    if not _smtp_configured():
-        return "Email outbound skipped (set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM)."
+async def _send_email_via_gmail_api(to_addr: str, subject: str, body: str) -> str:
+    if not _gmail_oauth_configured():
+        return "Email skipped: set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN."
 
-    host = os.environ["SMTP_HOST"]
-    port = int(os.getenv("SMTP_PORT", "587"))
-    user = os.getenv("SMTP_USER", "")
-    password = os.getenv("SMTP_PASSWORD", "")
-    from_addr = os.environ["SMTP_FROM"]
-    use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in ("1", "true", "yes")
+    def _send():
+        send_email_message(to_addr, subject, body)
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = from_addr
-    msg["To"] = to_addr
-    msg.set_content(body)
-
-    def _send_sync():
-        with smtplib.SMTP(host, port, timeout=30) as smtp:
-            if use_tls:
-                smtp.starttls()
-            if user and password:
-                smtp.login(user, password)
-            smtp.send_message(msg)
-
-    await asyncio.to_thread(_send_sync)
+    try:
+        await asyncio.to_thread(_send)
+    except Exception as exc:
+        logger.exception("Gmail API send failed")
+        return f"Gmail send failed: {exc!s}"
     return f"Email sent to {to_addr}."
 
 
@@ -86,13 +76,10 @@ async def dispatch_channel_reply(
     response_text: str,
 ) -> str:
     """
-    Deliver the agent reply on the correct channel.
-    - web + email: SMTP to the address from the form / CRM.
-    - email: SMTP to the customer email.
-    - whatsapp: Twilio WhatsApp API.
+    web + email: Gmail API (OAuth) only.
+    whatsapp: Twilio.
     """
     business = os.getenv("BUSINESS_NAME", "Support")
-    subj = os.getenv("SUPPORT_EMAIL_SUBJECT_PREFIX", f"[{business}] Support")
 
     if channel == "whatsapp":
         if not customer_phone:
@@ -101,9 +88,9 @@ async def dispatch_channel_reply(
 
     if channel in ("web", "email"):
         if _is_placeholder_email(customer_email):
-            return "Email outbound skipped (no valid customer email)."
+            return "Email skipped (no valid customer email)."
         assert customer_email is not None
-        subject = f"{subj} — Response to your inquiry"[:200]
+        subject = f"[{business}] Support — Response to your inquiry"[:200]
         if channel == "web":
             body = (
                 f"Thank you for contacting {business}.\n\n"
@@ -112,9 +99,10 @@ async def dispatch_channel_reply(
         else:
             body = f"{response_text}\n\n—\n{business} Support"
         try:
-            return await send_email_smtp(customer_email, subject, body)
+            return await _send_email_via_gmail_api(customer_email, subject, body)
         except Exception as exc:
-            logger.exception("SMTP failure")
-            return f"Email send failed: {exc!s}"
+            logger.exception("Email outbound failure")
+            return f"Email failed: {exc!s}"
 
     return f"No outbound adapter for channel={channel!r}."
+

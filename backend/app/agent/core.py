@@ -1,9 +1,13 @@
 import json
 import os
 import uuid
-
-from agents import Agent, OpenAIChatCompletionsModel, Runner, function_tool
 import openai
+from dotenv import load_dotenv
+
+# Load environment variables before any module-level initializations
+load_dotenv()
+
+from agents import Agent, OpenAIChatCompletionsModel, function_tool
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from app.models.conversation import Conversation
@@ -137,7 +141,7 @@ async def escalate_to_human(ctx, params: EscalateArgs) -> str:
 
 @function_tool
 async def send_response(ctx, params: ResponseArgs) -> str:
-    """Save the reply and deliver it on the active channel (WhatsApp via Twilio, web/email via SMTP)."""
+    """Save the reply and deliver it on the active channel (WhatsApp via Twilio, web/email via Gmail API)."""
     msg = Message(
         conversation_id=uuid.UUID(ctx.context.conversation_id),
         sender_type="agent",

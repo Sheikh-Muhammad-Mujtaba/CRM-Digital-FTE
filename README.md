@@ -77,3 +77,8 @@ Visit [`http://localhost:3000`](http://localhost:3000) using your local browser.
 - State Control: `SQLAlchemy (async)`, `Alembic`, `NeonDB (Postgres)`
 - Event Orchestrators: `Confluent Kafka` (Python bindings)
 - Digital FTE Engine: `Pydantic-AI`, `Gemini`
+
+## Project Guides
+- Local end-to-end validation: `specs/local-testing-guide.md`
+- Free deployment (Render/Vercel/Neon/Confluent): `specs/deployment-guide-free.md`
+- Skills definitions used by the agent: `specs/skills-manifest.md`
