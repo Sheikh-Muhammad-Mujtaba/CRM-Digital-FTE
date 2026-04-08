@@ -22,3 +22,21 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  # Creates unified intake topic used by API + consumer (see KAFKA_INTAKE_TOPIC).
+  kafka-init:
+    image: confluentinc/cp-kafka:7.3.2
+    depends_on:
+      - kafka
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        echo "Waiting for Kafka..."
+        for i in $$(seq 1 40); do
+          kafka-broker-api-versions --bootstrap-server kafka:9092 >/dev/null 2>&1 && break
+          sleep 2
+        done
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 \
+          --topic fte.inbound --replication-factor 1 --partitions 3
+        echo "Topic fte.inbound is available."

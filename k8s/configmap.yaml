@@ -4,6 +4,8 @@ metadata:
   name: digital-fte-config
   namespace: digital-fte
 data:
-  KAFKA_BROKER: "kafka-service:9092"
-  DATABASE_URL_READ: "postgresql+psycopg2://user@db/crm"
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-service:9092"
+  KAFKA_INTAKE_TOPIC: "fte.inbound"
+  KAFKA_CONSUMER_GROUP: "fte-message-processor"
+  CORS_ORIGINS: "https://your-frontend.example.com"
   LOG_LEVEL: "INFO"
