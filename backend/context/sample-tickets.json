@@ -1,0 +1,14 @@
+[
+  {
+    "channel": "web",
+    "subject": "Account access issue",
+    "message": "I cannot log in after password reset.",
+    "priority": "medium"
+  },
+  {
+    "channel": "whatsapp",
+    "subject": "Billing question",
+    "message": "I was charged twice this month.",
+    "priority": "high"
+  }
+]

@@ -3,7 +3,7 @@
 This document completely outlines the AI Agent architecture (Digital FTE) that serves as the centerpiece of this autonomous CRM system.
 
 ## 1. Core Framework Foundation
-The entire decision-making loop is implemented via the **Pydantic-AI** framework combined identically with the generic **Gemini-2.5-Flash** model. We elected this pathway because `pydantic-ai` offers fully-typed function calling structures via its dependency injection system, satisfying the requirements from the hackathon document while scaling significantly better than raw HTTP post implementations.
+The entire decision-making loop is implemented via the **OpenAI Agents SDK** framework combined identically with the generic **Gemini-2.5-Flash** model. We elected this pathway because `openai-agents` offers fully-typed function calling structures via its dependency injection system, satisfying the requirements from the hackathon document while scaling significantly better than raw HTTP post implementations.
 
 The orchestration root resides primarily at: `/backend/app/agent/core.py`.
 

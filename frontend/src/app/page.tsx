@@ -54,6 +54,12 @@ export default function App() {
           <p className="text-gray-300 text-base sm:text-lg">
             How can our autonomous FTE assist you today?
           </p>
+          <a
+            href="/admin"
+            className="inline-block mt-3 text-sm text-indigo-300 hover:text-indigo-200"
+          >
+            Open Admin Portal
+          </a>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-6">

@@ -22,10 +22,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Add backend directory to sys.path
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+backend_dir = os.path.dirname(os.path.dirname(__file__))
+sys.path.append(backend_dir)
 
 # Import your models
-from app.models import Base
+from database.models import Base
 
 # add your model's MetaData object here
 # for 'autogenerate' support
