@@ -30,6 +30,66 @@ class GmailAuthError(RuntimeError):
     """Raised when Gmail OAuth credentials are invalid or expired."""
 
 
+def _header_value_map(headers: list[dict]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for header in headers:
+        name = header.get("name")
+        value = header.get("value")
+        if isinstance(name, str) and isinstance(value, str):
+            out[name.lower()] = value
+    return out
+
+
+def should_ignore_inbound_email(customer_email: str, subject: str, headers: list[dict]) -> bool:
+    email_l = customer_email.lower()
+    subject_l = (subject or "").lower()
+    header_map = _header_value_map(headers)
+
+    service_domains = (
+        "facebookmail.com",
+        "facebook.com",
+        "linkedin.com",
+        "twitter.com",
+        "x.com",
+        "instagram.com",
+        "tiktok.com",
+        "youtube.com",
+        "google.com",
+    )
+    if any(email_l.endswith(f"@{domain}") for domain in service_domains):
+        return True
+
+    no_reply_markers = ("no-reply@", "noreply@", "donotreply@", "do-not-reply@")
+    if any(marker in email_l for marker in no_reply_markers):
+        return True
+
+    promotion_markers = (
+        "newsletter",
+        "promotion",
+        "promotional",
+        "sale",
+        "discount",
+        "offer",
+        "unsubscribe",
+        "digest",
+    )
+    if any(marker in subject_l for marker in promotion_markers):
+        return True
+
+    if "list-unsubscribe" in header_map:
+        return True
+
+    precedence = header_map.get("precedence", "").lower()
+    if precedence in {"bulk", "list", "junk"}:
+        return True
+
+    auto_submitted = header_map.get("auto-submitted", "").lower()
+    if auto_submitted and auto_submitted != "no":
+        return True
+
+    return False
+
+
 def _credentials() -> Credentials:
     client_id = os.getenv("GMAIL_CLIENT_ID")
     client_secret = os.getenv("GMAIL_CLIENT_SECRET")
@@ -140,6 +200,11 @@ def fetch_unread_support_messages(
         if not customer_email:
             continue
         if me_addr and customer_email.lower() == me_addr:
+            continue
+
+        if should_ignore_inbound_email(customer_email, subject, headers):
+            logger.info("Ignoring non-support email and marking as read: from=%s subject=%s", customer_email, subject)
+            mark_message_read(service, mid)
             continue
 
         snippet = full.get("snippet") or ""

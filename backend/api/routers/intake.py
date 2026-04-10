@@ -112,7 +112,13 @@ async def gmail_intake(request: Request):
     """
     try:
         payload = await request.json()
-        _publish(build_gmail_event(payload))
+        try:
+            event = build_gmail_event(payload)
+        except ValueError:
+            logger.info("Ignored non-support Gmail message at intake")
+            return WebhookResponse(status="success", message="Ignored non-support message")
+
+        _publish(event)
         logger.info("Gmail message queued: from=%s", payload.get("sender_email", "unknown"))
         return WebhookResponse(status="success", message="Gmail message queued")
     

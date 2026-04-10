@@ -17,6 +17,13 @@ from settings import get_settings
 logger = logging.getLogger(__name__)
 
 
+def _extract_subject_from_text(body: str) -> str:
+    first_line = (body or "").splitlines()[0].strip() if body else ""
+    if first_line.lower().startswith("subject:"):
+        return first_line.split(":", 1)[1].strip()
+    return ""
+
+
 def decode_gmail_pubsub_body(payload: dict) -> tuple[str, str | None]:
     inner = payload
     msg = payload.get("message") or {}
@@ -61,6 +68,10 @@ def build_gmail_event(payload: dict) -> dict:
     """
     body, sender = decode_gmail_pubsub_body(payload)
     customer_email = sender or payload.get("sender_email") or "unknown@example.com"
+    subject = (payload.get("subject") or "").strip() or _extract_subject_from_text(body)
+
+    if customer_email and gmail_api.should_ignore_inbound_email(customer_email, subject, []):
+        raise ValueError("Ignored non-support/promotional/service-platform email")
     
     if not body:
         logger.warning("Gmail payload has empty body from %s", customer_email)

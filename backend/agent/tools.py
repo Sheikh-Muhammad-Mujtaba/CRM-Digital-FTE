@@ -17,6 +17,43 @@ from outbound.dispatch import dispatch_channel_reply
 
 logger = logging.getLogger(__name__)
 
+_EMBEDDING_CACHE_MAX = 256
+_embedding_cache: dict[str, list[float]] = {}
+
+
+def _cached_embedding_key(query: str) -> str:
+    return " ".join(query.lower().split())
+
+
+def _put_embedding_in_cache(key: str, vector: list[float]) -> None:
+    if key in _embedding_cache:
+        _embedding_cache.pop(key)
+    _embedding_cache[key] = vector
+    if len(_embedding_cache) > _EMBEDDING_CACHE_MAX:
+        oldest = next(iter(_embedding_cache))
+        _embedding_cache.pop(oldest, None)
+
+
+def _get_embedding_from_cache(key: str) -> list[float] | None:
+    vector = _embedding_cache.get(key)
+    if vector is None:
+        return None
+    # Touch key for basic LRU behavior.
+    _embedding_cache.pop(key)
+    _embedding_cache[key] = vector
+    return vector
+
+
+def build_tracking_number(ticket_id: uuid.UUID, channel: str) -> str:
+    prefix_map = {
+        "web": "WEB",
+        "whatsapp": "WHA",
+        "email": "EML",
+    }
+    prefix = prefix_map.get((channel or "").lower(), "SRV")
+    compact = str(ticket_id).replace("-", "").upper()
+    return f"{prefix}-{compact[:4]}-{compact[4:8]}"
+
 
 class SearchQueryArgs(BaseModel):
     query: str = Field(description="The user's direct support inquiry or question")
@@ -50,12 +87,21 @@ async def search_knowledge_base(ctx, params: SearchQueryArgs) -> str:
         logger.info("tool=search_knowledge_base customer_id=%s", ctx.context.customer_id)
         from google import genai
 
-        genai_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        emb_res = genai_client.models.embed_content(
-            model="text-embedding-004",
-            contents=params.query,
-        )
-        query_vector = emb_res.embeddings[0].values
+        query_key = _cached_embedding_key(params.query)
+        query_vector = _get_embedding_from_cache(query_key)
+
+        if query_vector is None:
+            genai_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+            emb_res = genai_client.models.embed_content(
+                model="text-embedding-004",
+                contents=params.query,
+            )
+            query_vector = emb_res.embeddings[0].values
+            _put_embedding_in_cache(query_key, query_vector)
+            logger.info("tool=search_knowledge_base embedding_cache=miss")
+        else:
+            logger.info("tool=search_knowledge_base embedding_cache=hit")
+
         stmt = (
             select(KnowledgeBase.title, KnowledgeBase.content)
             .order_by(KnowledgeBase.embedding.cosine_distance(query_vector))
@@ -145,13 +191,17 @@ async def create_ticket(ctx, params: CreateTicketArgs) -> str:
         logger.info("tool=create_ticket customer_id=%s conversation_id=%s", ctx.context.customer_id, ctx.context.conversation_id)
         existing_stmt = select(Ticket).where(
             Ticket.customer_id == uuid.UUID(ctx.context.customer_id),
-            Ticket.conversation_id == uuid.UUID(ctx.context.conversation_id),
+            Ticket.status.in_(["open", "in_progress", "escalated"]),
         )
         existing_result = await ctx.context.session.execute(existing_stmt)
         existing = existing_result.scalar_one_or_none()
         if existing is not None:
-            logger.info("tool=create_ticket existing_ticket_id=%s", existing.id)
-            return f"Ticket already exists. Tracking ID: {existing.id}"
+            if existing.conversation_id is None:
+                existing.conversation_id = uuid.UUID(ctx.context.conversation_id)
+                await ctx.context.session.commit()
+            tracking = build_tracking_number(existing.id, ctx.context.channel)
+            logger.info("tool=create_ticket existing_ticket_id=%s tracking=%s", existing.id, tracking)
+            return f"Ticket already exists. Tracking ID: {tracking}"
 
         new_ticket = Ticket(
             customer_id=uuid.UUID(ctx.context.customer_id),
@@ -163,8 +213,9 @@ async def create_ticket(ctx, params: CreateTicketArgs) -> str:
         )
         ctx.context.session.add(new_ticket)
         await ctx.context.session.commit()
-        logger.info("tool=create_ticket created_ticket_id=%s", new_ticket.id)
-        return f"Ticket created. Tracking ID: {new_ticket.id}"
+        tracking = build_tracking_number(new_ticket.id, ctx.context.channel)
+        logger.info("tool=create_ticket created_ticket_id=%s tracking=%s", new_ticket.id, tracking)
+        return f"Ticket created. Tracking ID: {tracking}"
     except Exception as exc:
         logger.exception("tool=create_ticket failed")
         return f"Ticket creation failed ({exc!s})."
@@ -187,7 +238,7 @@ async def escalate_to_human(ctx, params: EscalateArgs) -> str:
         ticket_result = await ctx.context.session.execute(ticket_stmt)
         ticket = ticket_result.scalar_one_or_none()
         if ticket is not None:
-            ticket.status = "in_progress"
+            ticket.status = "escalated"
 
         ctx.context.session.add(
             Message(
@@ -217,12 +268,13 @@ async def send_response(ctx, params: ResponseArgs) -> str:
 
         response_text = params.response_text.strip()
         if ticket is not None and "Ticket Tracking Number:" not in response_text:
-            response_text = f"{response_text}\n\nTicket Tracking Number: {ticket.id}"
+            tracking = build_tracking_number(ticket.id, ctx.context.channel)
+            response_text = f"{response_text}\n\nTicket Tracking Number: {tracking}"
 
         conversation_id = uuid.UUID(ctx.context.conversation_id)
 
         if params.solved and ticket is not None:
-            ticket.status = "resolved"
+            ticket.status = "closed"
             ticket.resolved_at = ticket.resolved_at or datetime.utcnow()
             conv_stmt = select(Conversation).where(Conversation.id == conversation_id)
             conv_result = await ctx.context.session.execute(conv_stmt)

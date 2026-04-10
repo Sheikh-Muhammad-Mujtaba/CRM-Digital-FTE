@@ -169,6 +169,38 @@ async def _resolve_customer(session, msg_data: dict) -> Customer:
     return customer
 
 
+async def _find_active_conversation(session, customer_id: uuid.UUID) -> Conversation | None:
+    stmt = (
+        select(Conversation)
+        .where(
+            Conversation.customer_id == customer_id,
+            Conversation.status.in_(["open", "escalated"]),
+        )
+        .order_by(Conversation.started_at.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def _latest_human_handoff_instruction(session, conversation_id: uuid.UUID) -> str | None:
+    stmt = (
+        select(Message)
+        .where(
+            Message.conversation_id == conversation_id,
+            Message.sender_type == "system",
+            Message.content.like("HUMAN_TO_AGENT:%"),
+        )
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    note = result.scalar_one_or_none()
+    if note is None:
+        return None
+    return note.content.split(":", 1)[1].strip() if ":" in note.content else note.content
+
+
 async def process_message(msg_data: dict) -> bool:
     """Process an inbound message with the AI agent.
     
@@ -204,10 +236,15 @@ async def process_message(msg_data: dict) -> bool:
                     channel,
                 )
 
-                # Create conversation and store incoming message
-                conv = Conversation(customer_id=customer.id)
-                session.add(conv)
-                await session.flush()
+                # Reuse active conversation for the same customer so history/tickets remain linked.
+                conv = await _find_active_conversation(session, customer.id)
+                if conv is None:
+                    conv = Conversation(customer_id=customer.id)
+                    session.add(conv)
+                    await session.flush()
+                    logger.info("Created new conversation: customer_id=%s conversation_id=%s", customer.id, conv.id)
+                else:
+                    logger.info("Reusing active conversation: customer_id=%s conversation_id=%s status=%s", customer.id, conv.id, conv.status)
 
                 session.add(
                     Message(
@@ -218,6 +255,14 @@ async def process_message(msg_data: dict) -> bool:
                     )
                 )
                 await session.commit()
+
+                # Human owns escalated conversations until admin explicitly hands off back to agent.
+                if conv.status == "escalated":
+                    logger.info(
+                        "Conversation is escalated and human-owned; skipping agent run: conversation_id=%s",
+                        conv.id,
+                    )
+                    return True
 
                 # Prepare agent dependencies
                 deps = AgentDependencies(
@@ -232,11 +277,15 @@ async def process_message(msg_data: dict) -> bool:
 
                 # Format input with channel context
                 user_text = message_content
+                handoff_instruction = await _latest_human_handoff_instruction(session, conv.id)
+
                 agent_input = (
                     f"[Channel: {channel}; respond in the correct tone for this channel — "
                     "formal and complete for email/web, short and informal for whatsapp.]\n\n"
                     f"{user_text}"
                 )
+                if handoff_instruction:
+                    agent_input = f"[Human instruction for this case: {handoff_instruction}]\n\n{agent_input}"
 
                 # Run agent with dependencies injection
                 logger.info(

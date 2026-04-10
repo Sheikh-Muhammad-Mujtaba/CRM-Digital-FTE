@@ -32,7 +32,7 @@ async def fetch_dashboard_data(hours: int = 24) -> dict[str, Any]:
     async with AsyncSessionLocal() as session:
         total_tickets = (await session.execute(select(func.count()).select_from(Ticket))).scalar_one()
         open_tickets = (
-            await session.execute(select(func.count()).select_from(Ticket).where(Ticket.status == "open"))
+            await session.execute(select(func.count()).select_from(Ticket).where(Ticket.status != "closed"))
         ).scalar_one()
         total_messages = (await session.execute(select(func.count()).select_from(Message))).scalar_one()
         escalated_conversations = (
@@ -100,13 +100,13 @@ async def fetch_dashboard_data(hours: int = 24) -> dict[str, Any]:
                         created_at AS timestamp,
                         CASE
                             WHEN status = 'open' THEN 'warn'
-                            WHEN status = 'resolved' THEN 'info'
+                            WHEN status = 'closed' THEN 'info'
                             ELSE 'info'
                         END AS level,
                         'ticket' AS source,
                         CASE
                             WHEN status = 'open' THEN 'Ticket opened'
-                            WHEN status = 'resolved' THEN 'Ticket resolved'
+                            WHEN status = 'closed' THEN 'Ticket closed'
                             ELSE 'Ticket updated'
                         END AS message,
                         NULL::text AS channel,

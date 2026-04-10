@@ -132,10 +132,33 @@ type AssignedTicketsResponse = {
   }>;
 };
 
+type ConversationLogsResponse = {
+  count: number;
+  items: Array<{
+    conversation_id: string;
+    status: string;
+    started_at: string | null;
+    closed_at: string | null;
+    channel: string | null;
+    message_count: number;
+    customer: {
+      id: string | null;
+      name: string | null;
+      email: string | null;
+      phone_number: string | null;
+    };
+    latest_message: {
+      content: string | null;
+      created_at: string | null;
+      sender_type: string | null;
+    };
+  }>;
+};
+
 export default function AdminDashboardPage() {
   const router = useRouter();
 
-  const [activeTab, setActiveTab] = useState<"dashboard" | "tickets">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "tickets" | "manage-data">("dashboard");
   const [hours, setHours] = useState(24);
   const [activityLimit, setActivityLimit] = useState(80);
   const [activityChannel, setActivityChannel] = useState("all");
@@ -146,10 +169,20 @@ export default function AdminDashboardPage() {
   const [analytics, setAnalytics] = useState<DashboardAnalytics | null>(null);
   const [activity, setActivity] = useState<DashboardActivity | null>(null);
   const [tickets, setTickets] = useState<AssignedTicketsResponse | null>(null);
+  const [manageTickets, setManageTickets] = useState<AssignedTicketsResponse | null>(null);
+  const [conversationLogs, setConversationLogs] = useState<ConversationLogsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [statusDrafts, setStatusDrafts] = useState<Record<string, string>>({});
   const [replyingTicketId, setReplyingTicketId] = useState<string | null>(null);
+  const [updatingTicketId, setUpdatingTicketId] = useState<string | null>(null);
+  const [historyChannelFilter, setHistoryChannelFilter] = useState("all");
+  const [historyStatusFilter, setHistoryStatusFilter] = useState("all");
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyLimit, setHistoryLimit] = useState(120);
+  const [selectedConversationIds, setSelectedConversationIds] = useState<string[]>([]);
+  const [deletingHistory, setDeletingHistory] = useState(false);
 
   const loadDashboard = async () => {
     setLoading(true);
@@ -182,7 +215,7 @@ export default function AdminDashboardPage() {
         activityParams.set("sentiment", activitySentiment);
       }
 
-      const [dashboardRes, analyticsRes, activityRes, ticketsRes] = await Promise.all([
+      const [dashboardRes, analyticsRes, activityRes, ticketsRes, manageTicketsRes] = await Promise.all([
         fetch(`${apiBase}/api/admin/dashboard?hours=${hours}`, {
           cache: "no-store",
           headers: commonHeaders,
@@ -199,14 +232,19 @@ export default function AdminDashboardPage() {
           cache: "no-store",
           headers: commonHeaders,
         }),
+        fetch(`${apiBase}/api/admin/tickets?limit=200`, {
+          cache: "no-store",
+          headers: commonHeaders,
+        }),
       ]);
 
-      if (!dashboardRes.ok || !analyticsRes.ok || !activityRes.ok || !ticketsRes.ok) {
+      if (!dashboardRes.ok || !analyticsRes.ok || !activityRes.ok || !ticketsRes.ok || !manageTicketsRes.ok) {
         if (
           dashboardRes.status === 401 ||
           analyticsRes.status === 401 ||
           activityRes.status === 401 ||
-          ticketsRes.status === 401
+          ticketsRes.status === 401 ||
+          manageTicketsRes.status === 401
         ) {
           clearAdminCredentials();
           router.replace("/admin/login?reason=expired");
@@ -219,15 +257,66 @@ export default function AdminDashboardPage() {
       const analyticsJson = (await analyticsRes.json()) as DashboardAnalytics;
       const activityJson = (await activityRes.json()) as DashboardActivity;
       const ticketsJson = (await ticketsRes.json()) as AssignedTicketsResponse;
+      const manageTicketsJson = (await manageTicketsRes.json()) as AssignedTicketsResponse;
 
       setData(dashboardJson);
       setAnalytics(analyticsJson);
       setActivity(activityJson);
       setTickets(ticketsJson);
+      setManageTickets(manageTicketsJson);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unexpected error");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadConversationLogs = async () => {
+    try {
+      const credentials = getAdminCredentials();
+      if (!credentials) {
+        router.replace("/admin/login");
+        return;
+      }
+
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const params = new URLSearchParams({
+        limit: String(historyLimit),
+      });
+      if (historyChannelFilter !== "all") {
+        params.set("channel", historyChannelFilter);
+      }
+      if (historyStatusFilter !== "all") {
+        params.set("status", historyStatusFilter);
+      }
+      if (historySearch.trim()) {
+        params.set("query", historySearch.trim());
+      }
+
+      const response = await fetch(`${apiBase}/api/admin/history/conversations?${params.toString()}`, {
+        cache: "no-store",
+        headers: {
+          "X-Admin-User": credentials.username,
+          "X-Admin-Password": credentials.password,
+        },
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          clearAdminCredentials();
+          router.replace("/admin/login?reason=expired");
+          return;
+        }
+        throw new Error("Failed to load conversation history logs");
+      }
+
+      const payload = (await response.json()) as ConversationLogsResponse;
+      setConversationLogs(payload);
+      setSelectedConversationIds((current) =>
+        current.filter((conversationId) => payload.items.some((item) => item.conversation_id === conversationId))
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load conversation history logs");
     }
   };
 
@@ -274,10 +363,104 @@ export default function AdminDashboardPage() {
     }
   };
 
+  const updateTicketStatus = async (ticketId: string) => {
+    const newStatus = (statusDrafts[ticketId] || "").trim();
+    if (!newStatus) {
+      setError("Select a status first");
+      return;
+    }
+
+    try {
+      setUpdatingTicketId(ticketId);
+      setError(null);
+
+      const credentials = getAdminCredentials();
+      if (!credentials) {
+        router.replace("/admin/login");
+        return;
+      }
+
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const response = await fetch(`${apiBase}/api/admin/tickets/${ticketId}/status`, {
+        method: "PATCH",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-User": credentials.username,
+          "X-Admin-Password": credentials.password,
+        },
+        body: JSON.stringify({ status: newStatus }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to update ticket status");
+      }
+
+      await loadDashboard();
+      await loadConversationLogs();
+      setActiveTab("manage-data");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update ticket status");
+    } finally {
+      setUpdatingTicketId(null);
+    }
+  };
+
+  const deleteConversationHistory = async () => {
+    if (selectedConversationIds.length === 0) {
+      setError("Select at least one conversation to delete");
+      return;
+    }
+
+    try {
+      setDeletingHistory(true);
+      setError(null);
+
+      const credentials = getAdminCredentials();
+      if (!credentials) {
+        router.replace("/admin/login");
+        return;
+      }
+
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const response = await fetch(`${apiBase}/api/admin/history/conversations/bulk-delete`, {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-User": credentials.username,
+          "X-Admin-Password": credentials.password,
+        },
+        body: JSON.stringify({ conversation_ids: selectedConversationIds }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to delete conversation history");
+      }
+
+      setDeletingHistory(false);
+      setSelectedConversationIds([]);
+      await Promise.allSettled([loadDashboard(), loadConversationLogs()]);
+      setActiveTab("manage-data");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete conversation history");
+    } finally {
+      setDeletingHistory(false);
+    }
+  };
+
   useEffect(() => {
     loadDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hours, activityLimit, activityChannel, activitySender, activitySentiment]);
+
+  useEffect(() => {
+    if (activeTab !== "manage-data") {
+      return;
+    }
+    loadConversationLogs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, historyChannelFilter, historyStatusFilter, historySearch, historyLimit]);
 
   const sentimentSourceText = useMemo(() => {
     if (!data?.sentiments?.source) {
@@ -302,6 +485,34 @@ export default function AdminDashboardPage() {
 
     return score > 0 ? `Up ${wholeNumberDelta}` : `Down ${wholeNumberDelta}`;
   }, [data]);
+
+  const visibleConversationIds = useMemo(
+    () => (conversationLogs?.items || []).map((item) => item.conversation_id),
+    [conversationLogs]
+  );
+
+  const allVisibleSelected =
+    visibleConversationIds.length > 0 && visibleConversationIds.every((id) => selectedConversationIds.includes(id));
+
+  const toggleConversationSelection = (conversationId: string) => {
+    setSelectedConversationIds((current) =>
+      current.includes(conversationId)
+        ? current.filter((id) => id !== conversationId)
+        : [...current, conversationId]
+    );
+  };
+
+  const toggleSelectAllVisible = () => {
+    if (allVisibleSelected) {
+      setSelectedConversationIds((current) =>
+        current.filter((id) => !visibleConversationIds.includes(id))
+      );
+      return;
+    }
+    setSelectedConversationIds((current) =>
+      Array.from(new Set([...current, ...visibleConversationIds]))
+    );
+  };
 
   return (
     <main className="min-h-screen bg-[#0b1220] text-slate-100">
@@ -413,6 +624,17 @@ export default function AdminDashboardPage() {
               }`}
             >
               Assigned Tickets {tickets ? `(${tickets.count})` : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("manage-data")}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                activeTab === "manage-data"
+                  ? "bg-cyan-600 text-slate-950"
+                  : "border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-500"
+              }`}
+            >
+              Manage Data
             </button>
           </div>
         </header>
@@ -637,6 +859,179 @@ export default function AdminDashboardPage() {
                 ))}
               </div>
             )}
+          </section>
+        )}
+
+        {activeTab === "manage-data" && (
+          <section className="space-y-6">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-100">Manual Ticket Status Management</h2>
+              <p className="mt-1 text-sm text-slate-300">Update ticket status manually for operations and handoff control.</p>
+
+              {!manageTickets || manageTickets.items.length === 0 ? (
+                <p className="mt-4 text-sm text-slate-400">No tickets available.</p>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {manageTickets.items.map((ticket) => (
+                    <article key={`manage-${ticket.id}`} className="rounded-xl border border-slate-700 bg-slate-900 p-4">
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-100">{ticket.title}</p>
+                          <p className="text-xs text-slate-400">
+                            Ticket: {ticket.id} | Conversation: {ticket.conversation.id || "-"}
+                          </p>
+                        </div>
+                        <Tag text={ticket.status} tone="blue" />
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
+                        <select
+                          className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+                          value={statusDrafts[ticket.id] || ticket.status}
+                          onChange={(event) =>
+                            setStatusDrafts((current) => ({ ...current, [ticket.id]: event.target.value }))
+                          }
+                        >
+                          <option value="open">open</option>
+                          <option value="in_progress">in_progress</option>
+                          <option value="escalated">escalated</option>
+                          <option value="closed">closed</option>
+                        </select>
+
+                        <button
+                          type="button"
+                          onClick={() => updateTicketStatus(ticket.id)}
+                          disabled={updatingTicketId === ticket.id}
+                          className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-500 disabled:bg-cyan-900 disabled:text-slate-400"
+                        >
+                          {updatingTicketId === ticket.id ? "Updating..." : "Update Status"}
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-100">Conversation Logs</h2>
+                  <p className="mt-1 text-sm text-slate-300">
+                    Filter conversations, select multiple rows, and bulk delete message history.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadConversationLogs}
+                  className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-500"
+                >
+                  Refresh Logs
+                </button>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+                <FilterSelect value={historyChannelFilter} onChange={setHistoryChannelFilter}>
+                  <option value="all">All Channels</option>
+                  <option value="web">Web</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="email">Email</option>
+                </FilterSelect>
+
+                <FilterSelect value={historyStatusFilter} onChange={setHistoryStatusFilter}>
+                  <option value="all">All Statuses</option>
+                  <option value="open">open</option>
+                  <option value="escalated">escalated</option>
+                  <option value="closed">closed</option>
+                </FilterSelect>
+
+                <FilterSelect value={historyLimit} onChange={(v) => setHistoryLimit(Number(v))}>
+                  <option value={60}>60 Rows</option>
+                  <option value={120}>120 Rows</option>
+                  <option value={200}>200 Rows</option>
+                  <option value={400}>400 Rows</option>
+                </FilterSelect>
+
+                <input
+                  type="text"
+                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+                  placeholder="Search customer/email/conversation"
+                  value={historySearch}
+                  onChange={(event) => setHistorySearch(event.target.value)}
+                />
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5">
+                <label className="inline-flex items-center gap-2 text-sm text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAllVisible}
+                    className="h-4 w-4 rounded border-slate-600 bg-slate-900"
+                  />
+                  Select All Visible
+                </label>
+                <div className="flex items-center gap-3">
+                  <p className="text-xs text-slate-400">
+                    Selected: {selectedConversationIds.length} | Rows: {conversationLogs?.count || 0}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={deleteConversationHistory}
+                    disabled={deletingHistory || selectedConversationIds.length === 0}
+                    className="rounded-lg border border-rose-700 bg-rose-900/40 px-4 py-2 text-sm font-semibold text-rose-200 transition hover:bg-rose-800/50 disabled:opacity-60"
+                  >
+                    {deletingHistory ? "Deleting..." : "Delete Selected"}
+                  </button>
+                </div>
+              </div>
+
+              {!conversationLogs || conversationLogs.items.length === 0 ? (
+                <p className="mt-4 text-sm text-slate-400">No conversations found for current filters.</p>
+              ) : (
+                <div className="mt-4 max-h-[32rem] space-y-2 overflow-y-auto pr-1">
+                  {conversationLogs.items.map((item) => {
+                    const selected = selectedConversationIds.includes(item.conversation_id);
+                    return (
+                      <article
+                        key={`log-${item.conversation_id}`}
+                        className={`rounded-xl border p-3 ${
+                          selected ? "border-cyan-600 bg-cyan-950/20" : "border-slate-700 bg-slate-900"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <label className="inline-flex items-start gap-2">
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={() => toggleConversationSelection(item.conversation_id)}
+                              className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-900"
+                            />
+                            <span className="text-sm text-slate-200">
+                              {item.customer.name || item.customer.email || "Unknown customer"}
+                            </span>
+                          </label>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Tag text={item.channel || "unknown"} tone="slate" />
+                            <Tag text={item.status} tone="blue" />
+                            <Tag text={`${item.message_count} msg`} tone="amber" />
+                          </div>
+                        </div>
+
+                        <p className="mt-2 text-xs text-slate-400">Conversation: {item.conversation_id}</p>
+                        <p className="mt-1 line-clamp-2 text-sm text-slate-300">
+                          {item.latest_message.content || "No messages available"}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Last activity: {item.latest_message.created_at ? new Date(item.latest_message.created_at).toLocaleString() : "-"}
+                        </p>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </section>
         )}
       </div>

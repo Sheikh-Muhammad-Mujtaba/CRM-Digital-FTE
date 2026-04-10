@@ -56,7 +56,7 @@ logger.info("Initialized AsyncOpenAI client for Gemini")
 # Step 4: Wrap in OpenAIChatCompletionsModel
 # This implements the Model interface expected by the Agents SDK
 model = OpenAIChatCompletionsModel(
-    model="gemini-2.5-flash",
+    model="gemini-2.5-flash-lite",  # or "gemini-2.5-pro" for higher-end model
     openai_client=client
 )
 logger.info("Initialized OpenAIChatCompletionsModel wrapping Gemini")

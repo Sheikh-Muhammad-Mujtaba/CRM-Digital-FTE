@@ -19,3 +19,15 @@ class WebhookResponse(BaseModel):
 class TicketReplyPayload(BaseModel):
     response_text: str
     mark_resolved: bool = False
+
+
+class TicketHandoffPayload(BaseModel):
+    instruction: str
+
+
+class TicketStatusUpdatePayload(BaseModel):
+    status: str
+
+
+class ConversationBulkDeletePayload(BaseModel):
+    conversation_ids: list[str]
