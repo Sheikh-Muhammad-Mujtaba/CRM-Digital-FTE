@@ -31,6 +31,7 @@
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
 - [Configuration](#configuration)
+- [Channel Setup](#channel-setup)
 - [Run Locally](#run-locally)
 - [API Endpoints](#api-endpoints)
 - [Admin Operations](#admin-operations)
@@ -62,7 +63,7 @@ Primary implementation references:
 ```mermaid
 flowchart LR
    A[Web Form\n/api/intake/web] --> D[FastAPI Intake Router]
-   B[WhatsApp\n/api/intake/whatsapp] --> D
+   B[WhatsApp\n/api/intake/twilio] --> D
    C[Email\n/api/intake/gmail] --> D
 
    D --> E[Kafka Topic\nfte.inbound]
@@ -181,6 +182,69 @@ Frontend environment:
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
+## Channel Setup
+### Twilio WhatsApp Setup
+Webhook route sources:
+- [backend/api/routers/intake.py](backend/api/routers/intake.py)
+- [backend/channels/whatsapp_handler.py](backend/channels/whatsapp_handler.py)
+
+Required backend env values:
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_WHATSAPP_FROM`
+
+Twilio console steps:
+1. Open Twilio Console and enable WhatsApp sandbox or approved WhatsApp sender.
+2. Go to Messaging webhook configuration for your sender.
+3. Set incoming webhook URL to one of:
+   - `https://<your-domain>/api/intake/twilio`
+4. Method must be `POST`.
+5. Save and send a test WhatsApp message to validate ingestion.
+
+### Gmail Email Setup
+Email flow references:
+- [backend/integrations/gmail_api.py](backend/integrations/gmail_api.py)
+- [backend/channels/gmail_handler.py](backend/channels/gmail_handler.py)
+- [backend/api/routers/intake.py](backend/api/routers/intake.py)
+- [backend/scripts/regenerate_gmail_refresh_token.py](backend/scripts/regenerate_gmail_refresh_token.py)
+
+Required backend env values:
+- `GMAIL_CLIENT_ID`
+- `GMAIL_CLIENT_SECRET`
+- `GMAIL_REFRESH_TOKEN`
+- `GMAIL_PUBSUB_TOPIC` (for Pub/Sub watch mode)
+- `GMAIL_WEBHOOK_SECRET` (recommended)
+
+Generate or regenerate Gmail refresh token:
+```powershell
+cd backend
+.venv\Scripts\python.exe scripts\regenerate_gmail_refresh_token.py
+```
+
+What the script does:
+1. Prints Google OAuth consent URL.
+2. You grant access to Gmail scopes.
+3. You paste authorization code into terminal.
+4. Script returns a new `GMAIL_REFRESH_TOKEN`.
+
+Manual Gmail sync endpoint (polling mode):
+- `POST /api/gmail/sync`
+
+Register Gmail Pub/Sub watch endpoint:
+- `POST /api/gmail/watch`
+
+Pub/Sub push webhook endpoint:
+- `POST /api/webhooks/gmail/pubsub`
+
+Gmail setup checklist:
+1. Enable Gmail API in Google Cloud project.
+2. Create OAuth client and set consent screen/scopes.
+3. Generate refresh token using the script and update `.env`.
+4. If using Pub/Sub mode, set `GMAIL_PUBSUB_TOPIC` and grant publisher permission to Gmail push service account.
+5. Restart backend API and verify with `POST /api/gmail/sync`.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
 ## Run Locally
 Start infrastructure:
 ```bash
@@ -228,7 +292,7 @@ Main routes:
 - `GET /health`
 - `GET /ready`
 - `POST /api/intake/web`
-- `POST /api/intake/whatsapp`
+- `POST /api/intake/twilio`
 - `POST /api/intake/gmail`
 - `GET /api/admin/dashboard`
 - `GET /api/admin/dashboard/activity`

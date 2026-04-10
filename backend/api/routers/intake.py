@@ -56,7 +56,6 @@ async def web_intake(payload: WebMessagePayload):
 
 
 @router.post("/intake/twilio", response_model=WebhookResponse)
-@router.post("/intake/whatsapp", response_model=WebhookResponse)
 async def whatsapp_intake(request: Request):
     """Accept Twilio WhatsApp webhook and queue for processing.
     

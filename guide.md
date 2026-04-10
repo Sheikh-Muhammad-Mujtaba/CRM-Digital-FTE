@@ -157,7 +157,7 @@ curl -X POST http://localhost:8000/api/intake/web \
 
 ```bash
 # Simulate Twilio webhook (local testing)
-curl -X POST http://localhost:8000/api/intake/whatsapp \
+curl -X POST http://localhost:8000/api/intake/twilio \
   -F "From=whatsapp:+1234567890" \
   -F "Body=Test message from WhatsApp" \
   -F "MessageSid=SM123456789" \
@@ -167,7 +167,7 @@ curl -X POST http://localhost:8000/api/intake/whatsapp \
 # 1. Get public URL: ngrok http 8000
 # 2. Configure in Twilio console:
 #    Phone Numbers → Your WhatsApp number → Webhook URL
-#    Set to: https://your-public-url.ngrok.io/api/intake/whatsapp
+#    Set to: https://your-public-url.ngrok.io/api/intake/twilio
 ```
 
 ### Gmail Integration (Optional - Requires Setup)

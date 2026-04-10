@@ -9,7 +9,7 @@
 
 ## 2. Trigger Events & Kafka Pathways
 - `gmail-pubsub` -> Routes directly to `fte.inbound` topic.
-- `twilio-webhook` -> Pushes payload to `/api/intake/whatsapp`.
+- `twilio-webhook` -> Pushes payload to `/api/intake/twilio`.
 - `web-support` -> Pushes NextJS form payload to `/api/intake/web`.
 - Resulting pipeline evaluates context via OpenAI API interface configured explicitly toward `Gemini-2.5-flash`.
 
