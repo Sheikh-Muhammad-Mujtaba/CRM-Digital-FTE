@@ -1,48 +1,87 @@
 # Autonomous CRM Digital FTE - Agent Architecture
 
-This document completely outlines the AI Agent architecture (Digital FTE) that serves as the centerpiece of this autonomous CRM system.
+This document describes the current AI Agent architecture and operational rules used by the CRM Digital FTE system.
 
-## 1. Core Framework Foundation
-The entire decision-making loop is implemented via the **OpenAI Agents SDK** framework combined identically with the generic **Gemini-2.5-Flash** model. We elected this pathway because `openai-agents` offers fully-typed function calling structures via its dependency injection system, satisfying the requirements from the hackathon document while scaling significantly better than raw HTTP post implementations.
+## 1. Core Stack
+- Agent framework: OpenAI Agents SDK
+- Model provider: Gemini via OpenAI-compatible endpoint
+- Runtime orchestration:
+    - API app: `/backend/api/main.py`
+    - Worker loop: `/backend/workers/message_processor.py`
+    - Agent definition: `/backend/agent/customer_success_agent.py`
+    - Prompt construction: `/backend/agent/prompts.py`
 
-The orchestration root resides primarily at: `/backend/app/agent/core.py`.
-
-## 2. Dependency Context Mapping
-Every time a Kafka event hits the consumer pool, it constructs the current application runtime and parses the following payload via the Dataclass `AgentDependencies` located at `/backend/app/agent/deps.py`:
+## 2. Dependency Injection Contract
+Per inbound event, the worker builds `AgentDependencies` from `/backend/agent/deps.py`:
 
 ```python
 @dataclass
 class AgentDependencies:
-    session: AsyncSession
-    customer_id: str
-    channel: str
-    conversation_id: str
+        session: AsyncSession
+        customer_id: str
+        channel: str
+        conversation_id: str
+        customer_email: Optional[str] = None
+        customer_phone: Optional[str] = None
+        customer_name: Optional[str] = None
 ```
-By utilizing this dependency layer:
-- The Gemini Agent can execute backend Postgres operations universally across any function call **without** globally importing database credentials or risking connection leaks! 
-- The `channel` context empowers prompt engineering heuristics to adjust the response style based heavily on if it was submitted via `whatsapp` vs `web`.
 
-## 3. Dynamic Tools (Capabilities)
-Our Digital FTE is uniquely equipped with 5 robust Python tools mapping directly to production database tables. Each tool enforces strict typings via Pydantic `BaseModel` schemas, fully satisfying expectations for OpenAI Agent SDK `@function_tool` structural precision.
+This contract enables tools to:
+- perform DB operations safely through shared async session,
+- dispatch outbound messages through channel-specific identity (email/phone),
+- adapt tone by channel.
 
-### A. `search_knowledge_base`
-**Logic Profile:** Takes a direct semantic NLP user string query. This tool operates against the Postgres `knowledge_base` utilizing natively integrated `pgvector` indexing calculations parsing cosine distances to locate resolutions explicitly listed in the corporate DB. If documentation exists regarding the customer's query, the AI analyzes it before sending final responses.
+## 3. Inbound Channel Contract
+- Web intake: `POST /api/intake/web`
+- WhatsApp (Twilio canonical endpoint): `POST /api/intake/twilio`
+- Gmail direct intake: `POST /api/intake/gmail`
+- Gmail Pub/Sub push: `POST /api/webhooks/gmail/pubsub`
 
-### B. `get_customer_history`
-**Logic Profile:** Reaches directly into the SQL layer leveraging the `customer_id` parameter to pull down historical data strings relating strictly to previous resolved / open support `Tickets`. If it spots redundant questions, the AI will use this history explicitly to adjust recommendations.
+All events are normalized then published to Kafka intake topic for worker processing.
 
-### C. `create_ticket`
-**Logic Profile:** In the event an inquiry demands a physical replacement, accounting change, or hits a roadblock that the Gemini model is restricted from altering, this tool is forcefully executed. It creates a brand-new trackable entity in the `tickets` table and updates its workflow status to `open`.
+## 4. Tool Capabilities
+Tools are defined in `/backend/agent/tools.py`.
 
-### D. `escalate_to_human`
-**Logic Profile:** Operates concurrently (often combined natively via multi-tool execution capabilities within Gemini 2.5 Flash) with the `create_ticket` component. Explicitly stops automated responses, flagging the overall conversation ID layer to a dedicated UI status so actual Customer Success Members can natively override the AI loop context.
+1. `search_knowledge_base`
+- Semantic retrieval against `knowledge_base` via pgvector + embeddings.
+- Uses lightweight embedding cache to reduce repeated API calls.
 
-### E. `send_response`
-**Logic Profile:** Bypasses manual string-returning in the system console. It explicitly writes the AI's final conclusion directly to the `messages` table assigning a `sender_type="agent"`. This allows external microservices to track response logs via webhook queues out securely to Gmail or Twilio WhatsApp channels seamlessly across boundaries.
+2. `get_customer_history`
+- Pulls linked cross-conversation customer history (tickets + recent messages).
 
-## 4. Prompt Engineering Directives
-The base system behavior dictates adherence exactly matching these instructions via `system_prompt`:
-1. Search the Knowledge Base for strict corporate context before hallucinating answers.
-2. Analyze ticket behaviors.
-3. Automatically generate Escalation triggers if restricted contexts map back into your reasoning logic chain natively.
-4. Adapt tone purely based on the channel context provided to you (shorter outputs for WhatsApp and SMS components, extremely professional structure for native E-mail or explicit Web Form tickets).
+3. `create_ticket`
+- Enforces one active service ticket per customer (reuses active ticket when appropriate).
+- Returns channel-specific tracking format:
+    - `WEB-xxxx-xxxx`
+    - `WHA-xxxx-xxxx`
+    - `EML-xxxx-xxxx`
+
+4. `escalate_to_human`
+- Marks conversation as escalated and records escalation event.
+- Escalated conversations are human-owned until handoff back.
+
+5. `send_response`
+- Persists final agent response and sentiment marker.
+- Closes ticket as `closed` when solved.
+- Dispatches outbound reply through channel adapters.
+
+## 5. Human Escalation Governance
+- While conversation status is `escalated`, worker stores inbound customer messages but skips agent run.
+- Admin can hand off back to agent with instruction via:
+    - `POST /api/admin/tickets/{ticket_id}/handoff-to-agent`
+- Handoff instruction is injected into the next agent turn as `HUMAN_TO_AGENT:` context.
+
+## 6. Prompt and API Call Policy
+Prompt rules in `/backend/agent/prompts.py` enforce:
+- direct-answer-first behavior when confidence is high,
+- minimal tool call strategy to reduce rate-limit pressure,
+- retrieval tools only when needed for certainty or safety,
+- strict email policy (non-support/promotional/service-platform emails ignored by ingestion layer).
+
+## 7. Admin Data Management
+Admin operations include:
+- ticket status updates,
+- conversation log filtering,
+- bulk deletion of full conversation graph (messages + linked tickets + conversation row).
+
+Relevant route file: `/backend/api/routers/admin.py`.
